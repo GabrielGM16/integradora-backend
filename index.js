@@ -13,11 +13,56 @@ const PORT = process.env.PORT || 5000;
 // Configurar conexión con PostgreSQL
 const pool = new Pool({
   host: process.env.PG_HOST || 'localhost',
-  port: process.env.PG_PORT || 5433,
+  port: process.env.PG_PORT || 5432,
   database: process.env.PG_DATABASE || 'ecommerce',
   user: process.env.PG_USER || 'postgres',
   password: process.env.PG_PASSWORD || 'linux',
 });
+
+// Automatización del esquema de tablas
+const initDB = async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+          id SERIAL PRIMARY KEY,
+          email VARCHAR(255) UNIQUE NOT NULL,
+          password VARCHAR(255) NOT NULL,
+          role VARCHAR(50) NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS products (
+          id SERIAL PRIMARY KEY,
+          name VARCHAR(255) NOT NULL,
+          price NUMERIC(10, 2) NOT NULL,
+          stock INTEGER NOT NULL,
+          seller_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS orders (
+          id SERIAL PRIMARY KEY,
+          buyer_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          total NUMERIC(10, 2) NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS order_items (
+          id SERIAL PRIMARY KEY,
+          order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+          product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+          quantity INTEGER NOT NULL,
+          price NUMERIC(10, 2) NOT NULL
+      );
+    `);
+    console.log('Tablas creadas o ya existentes');
+  } catch (err) {
+    console.error('Error al inicializar la base de datos:', err);
+  }
+};
+
+// Llama a la función para inicializar la base de datos
+initDB();
 
 // Middleware
 app.use(cors());
@@ -53,8 +98,8 @@ app.post('/upload-product', verifyToken, async (req, res) => {
 
   try {
     const result = await pool.query(
-      'INSERT INTO products (name, price, stock, seller) VALUES ($1, $2, $3, $4) RETURNING *',
-      [name, price, stock, req.user.email]
+      'INSERT INTO products (name, price, stock, seller_id) VALUES ($1, $2, $3, $4) RETURNING *',
+      [name, price, stock, req.user.id]
     );
     res.status(201).json({ message: 'Producto subido exitosamente', product: result.rows[0] });
   } catch (err) {
@@ -84,8 +129,8 @@ app.delete('/products/:id', verifyToken, async (req, res) => {
 
   try {
     const result = await pool.query(
-      'DELETE FROM products WHERE id = $1 AND seller = $2 RETURNING *',
-      [id, req.user.email]
+      'DELETE FROM products WHERE id = $1 AND seller_id = $2 RETURNING *',
+      [id, req.user.id]
     );
 
     if (result.rowCount === 0) {
@@ -156,7 +201,7 @@ app.post('/orders', verifyToken, async (req, res) => {
 
   try {
     const result = await pool.query(
-      'INSERT INTO orders (user_id, total) VALUES ($1, $2) RETURNING id',
+      'INSERT INTO orders (buyer_id, total) VALUES ($1, $2) RETURNING id',
       [req.user.id, total]
     );
 
@@ -164,8 +209,8 @@ app.post('/orders', verifyToken, async (req, res) => {
 
     for (const product of products) {
       await pool.query(
-        'INSERT INTO order_items (order_id, product_id, quantity) VALUES ($1, $2, $3)',
-        [orderId, product.id, product.quantity || 1]
+        'INSERT INTO order_items (order_id, product_id, quantity, price) VALUES ($1, $2, $3, $4)',
+        [orderId, product.id, product.quantity || 1, product.price]
       );
     }
 
